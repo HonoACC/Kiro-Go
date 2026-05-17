@@ -811,14 +811,14 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 
 	// Stream or non-stream
 	if req.Stream {
-		h.handleClaudeStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, overheadTokens, cacheUsage, cacheProfile)
+		h.handleClaudeStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, cacheUsage, cacheProfile)
 	} else {
-		h.handleClaudeNonStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, overheadTokens, cacheUsage, cacheProfile)
+		h.handleClaudeNonStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, cacheUsage, cacheProfile)
 	}
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, overheadTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -835,7 +835,6 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	msgID := "msg_" + uuid.New().String()
 	var inputTokens, outputTokens int
 	var credits float64
-	var realInputTokens int
 	var toolUses []KiroToolUse
 	var nextContentIndex int
 	var rawContentBuilder strings.Builder
@@ -1170,9 +1169,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 		OnCredits: func(c float64) {
 			credits = c
 		},
-		OnContextUsage: func(pct float64) {
-			realInputTokens = int(pct * float64(getContextWindowSize(model)) / 100.0)
-		},
+		OnContextUsage: func(pct float64) {},
 	}
 
 	err := CallKiroAPI(account, payload, callback)
@@ -1195,11 +1192,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	}
 	closeActiveBlock()
 
-	if realInputTokens > 0 {
-		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
-	} else if inputTokens <= 0 {
-		inputTokens = estimatedInputTokens
-	}
+	inputTokens = estimatedInputTokens
 	outputContent, extractedReasoning := extractThinkingFromContent(rawContentBuilder.String())
 	thinkingOutput := rawThinkingBuilder.String()
 	if thinking && thinkingOutput == "" && extractedReasoning != "" {
@@ -1307,13 +1300,12 @@ func (h *Handler) checkOverageError(err error, accountID string) {
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, overheadTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
 	var content string
 	var thinkingContent string
 	var toolUses []KiroToolUse
 	var inputTokens, outputTokens int
 	var credits float64
-	var realInputTokens int
 
 	callback := &KiroStreamCallback{
 		OnText: func(text string, isThinking bool) {
@@ -1336,9 +1328,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		OnCredits: func(c float64) {
 			credits = c
 		},
-		OnContextUsage: func(pct float64) {
-			realInputTokens = int(pct * float64(getContextWindowSize(model)) / 100.0)
-		},
+		OnContextUsage: func(pct float64) {},
 	}
 
 	err := CallKiroAPI(account, payload, callback)
@@ -1361,11 +1351,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 		rawThinkingContent = ""
 	}
 
-	if realInputTokens > 0 {
-		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
-	} else if inputTokens <= 0 {
-		inputTokens = estimatedInputTokens
-	}
+	inputTokens = estimatedInputTokens
 	outputTokens = estimateClaudeOutputTokens(finalContent, "", toolUses)
 
 	h.recordSuccess(inputTokens, outputTokens, credits)
@@ -1457,19 +1443,18 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
 	req.Model = actualModel
 	estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
-	overheadTokens := kiroInternalOverheadTokens(thinking, false)
 
 	kiroPayload := OpenAIToKiro(&req, thinking)
 
 	if req.Stream {
-		h.handleOpenAIStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens, overheadTokens)
+		h.handleOpenAIStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
 	} else {
-		h.handleOpenAINonStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens, overheadTokens)
+		h.handleOpenAINonStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
 	}
 }
 
 // handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int, overheadTokens int) {
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1488,7 +1473,6 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	var toolCallIndex int
 	var inputTokens, outputTokens int
 	var credits float64
-	var realInputTokens int
 	var rawContentBuilder strings.Builder
 	var rawReasoningBuilder strings.Builder
 
@@ -1781,9 +1765,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		OnCredits: func(c float64) {
 			credits = c
 		},
-		OnContextUsage: func(pct float64) {
-			realInputTokens = int(pct * float64(getContextWindowSize(model)) / 100.0)
-		},
+		OnContextUsage: func(pct float64) {},
 	}
 
 	err := CallKiroAPI(account, payload, callback)
@@ -1801,11 +1783,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 		eventThinkingOpen = false
 	}
 
-	if realInputTokens > 0 {
-		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
-	} else if inputTokens <= 0 {
-		inputTokens = estimatedInputTokens
-	}
+	inputTokens = estimatedInputTokens
 	outputContent, extractedReasoning := extractThinkingFromContent(rawContentBuilder.String())
 	reasoningOutput := rawReasoningBuilder.String()
 	if thinking && reasoningOutput == "" && extractedReasoning != "" {
@@ -1853,13 +1831,12 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int, overheadTokens int) {
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
 	var content string
 	var reasoningContent string
 	var toolUses []KiroToolUse
 	var inputTokens, outputTokens int
 	var credits float64
-	var realInputTokens int
 
 	callback := &KiroStreamCallback{
 		OnText: func(text string, isThinking bool) {
@@ -1873,9 +1850,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		OnComplete: func(inTok, outTok int) { inputTokens = inTok; outputTokens = outTok },
 		OnError:    func(err error) { h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429")) },
 		OnCredits:  func(c float64) { credits = c },
-		OnContextUsage: func(pct float64) {
-			realInputTokens = int(pct * float64(getContextWindowSize(model)) / 100.0)
-		},
+		OnContextUsage: func(pct float64) {},
 	}
 
 	err := CallKiroAPI(account, payload, callback)
@@ -1895,11 +1870,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		reasoningContent = ""
 	}
 
-	if realInputTokens > 0 {
-		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
-	} else if inputTokens <= 0 {
-		inputTokens = estimatedInputTokens
-	}
+	inputTokens = estimatedInputTokens
 	outputTokens = estimateOpenAIOutputTokens(finalContent, "", toolUses)
 
 	h.recordSuccess(inputTokens, outputTokens, credits)

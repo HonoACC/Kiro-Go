@@ -206,10 +206,3 @@ func kiroInternalOverheadTokens(thinking bool, hasSystemPrompt bool) int {
 	}
 	return overhead
 }
-
-func subtractOverhead(tokens, overhead int) int {
-	if tokens-overhead < 0 {
-		return 0
-	}
-	return tokens - overhead
-}
