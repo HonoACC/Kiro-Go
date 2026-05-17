@@ -194,3 +194,22 @@ func estimateOpenAIContentTokens(content interface{}) int {
 func estimateOpenAIOutputTokens(content, reasoningContent string, toolUses []KiroToolUse) int {
 	return estimateClaudeOutputTokens(content, reasoningContent, toolUses)
 }
+
+func kiroInternalOverheadTokens(thinking bool, hasSystemPrompt bool) int {
+	overhead := 0
+	if thinking {
+		overhead += estimateApproxTokens(ThinkingModePrompt)
+	}
+	if hasSystemPrompt {
+		overhead += estimateApproxTokens("--- SYSTEM PROMPT ---\n")
+		overhead += estimateApproxTokens("\n--- END SYSTEM PROMPT ---\n\n")
+	}
+	return overhead
+}
+
+func subtractOverhead(tokens, overhead int) int {
+	if tokens-overhead < 0 {
+		return 0
+	}
+	return tokens - overhead
+}

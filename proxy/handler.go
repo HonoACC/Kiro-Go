@@ -741,11 +741,10 @@ func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	thinkingCfg := config.GetThinkingConfig()
-	actualModel, thinking := resolveClaudeThinkingMode(req.Model, req.Thinking, thinkingCfg.Suffix)
+	actualModel, _ := resolveClaudeThinkingMode(req.Model, req.Thinking, thinkingCfg.Suffix)
 	req.Model = actualModel
-	effectiveReq := cloneClaudeRequestForThinking(&req, thinking)
 
-	estimatedTokens := estimateClaudeRequestInputTokens(effectiveReq)
+	estimatedTokens := estimateClaudeRequestInputTokens(&req)
 	if estimatedTokens < 1 {
 		estimatedTokens = 1
 	}
@@ -802,8 +801,9 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 	req.Model = actualModel
 	effectiveReq := cloneClaudeRequestForThinking(&req, thinking)
 	thinkingResponseOpts := resolveClaudeThinkingResponseOptions(req.Thinking, thinkingCfg.ClaudeFormat)
-	estimatedInputTokens := estimateClaudeRequestInputTokens(effectiveReq)
-	cacheProfile := h.promptCache.BuildClaudeProfile(effectiveReq, estimatedInputTokens)
+	estimatedInputTokens := estimateClaudeRequestInputTokens(&req)
+	overheadTokens := kiroInternalOverheadTokens(thinking, thinking || hasClaudeSystemContent(req.System))
+	cacheProfile := h.promptCache.BuildClaudeProfile(effectiveReq, estimatedInputTokens+overheadTokens)
 	cacheUsage := h.promptCache.Compute(account.ID, cacheProfile)
 
 	// 转换请求
@@ -811,14 +811,14 @@ func (h *Handler) handleClaudeMessagesInternal(w http.ResponseWriter, r *http.Re
 
 	// Stream or non-stream
 	if req.Stream {
-		h.handleClaudeStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, cacheUsage, cacheProfile)
+		h.handleClaudeStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, overheadTokens, cacheUsage, cacheProfile)
 	} else {
-		h.handleClaudeNonStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, cacheUsage, cacheProfile)
+		h.handleClaudeNonStream(w, account, kiroPayload, req.Model, thinking, thinkingResponseOpts, estimatedInputTokens, overheadTokens, cacheUsage, cacheProfile)
 	}
 }
 
 // handleClaudeStream Claude 流式响应
-func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
+func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, overheadTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1196,7 +1196,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	closeActiveBlock()
 
 	if realInputTokens > 0 {
-		inputTokens = realInputTokens
+		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
 	} else if inputTokens <= 0 {
 		inputTokens = estimatedInputTokens
 	}
@@ -1307,7 +1307,7 @@ func (h *Handler) checkOverageError(err error, accountID string) {
 }
 
 // handleClaudeNonStream Claude 非流式响应
-func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
+func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, thinkingOpts claudeThinkingResponseOptions, estimatedInputTokens int, overheadTokens int, cacheUsage promptCacheUsage, cacheProfile *promptCacheProfile) {
 	var content string
 	var thinkingContent string
 	var toolUses []KiroToolUse
@@ -1362,7 +1362,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	}
 
 	if realInputTokens > 0 {
-		inputTokens = realInputTokens
+		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
 	} else if inputTokens <= 0 {
 		inputTokens = estimatedInputTokens
 	}
@@ -1457,18 +1457,19 @@ func (h *Handler) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	actualModel, thinking := ParseModelAndThinking(req.Model, thinkingCfg.Suffix)
 	req.Model = actualModel
 	estimatedInputTokens := estimateOpenAIRequestInputTokens(&req)
+	overheadTokens := kiroInternalOverheadTokens(thinking, false)
 
 	kiroPayload := OpenAIToKiro(&req, thinking)
 
 	if req.Stream {
-		h.handleOpenAIStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
+		h.handleOpenAIStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens, overheadTokens)
 	} else {
-		h.handleOpenAINonStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens)
+		h.handleOpenAINonStream(w, account, kiroPayload, req.Model, thinking, estimatedInputTokens, overheadTokens)
 	}
 }
 
 // handleOpenAIStream OpenAI 流式响应
-func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int, overheadTokens int) {
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -1801,7 +1802,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	}
 
 	if realInputTokens > 0 {
-		inputTokens = realInputTokens
+		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
 	} else if inputTokens <= 0 {
 		inputTokens = estimatedInputTokens
 	}
@@ -1852,7 +1853,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 }
 
 // handleOpenAINonStream OpenAI 非流式响应
-func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int) {
+func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, thinking bool, estimatedInputTokens int, overheadTokens int) {
 	var content string
 	var reasoningContent string
 	var toolUses []KiroToolUse
@@ -1895,7 +1896,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	}
 
 	if realInputTokens > 0 {
-		inputTokens = realInputTokens
+		inputTokens = subtractOverhead(realInputTokens, overheadTokens)
 	} else if inputTokens <= 0 {
 		inputTokens = estimatedInputTokens
 	}
