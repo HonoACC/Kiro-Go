@@ -1208,7 +1208,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 	if !thinking {
 		thinkingOutput = ""
 	}
-	outputTokens = estimateClaudeOutputTokens(outputContent, thinkingOutput, toolUses)
+	outputTokens = estimateClaudeOutputTokens(outputContent, "", toolUses)
 
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
@@ -1366,7 +1366,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 	} else if inputTokens <= 0 {
 		inputTokens = estimatedInputTokens
 	}
-	outputTokens = estimateClaudeOutputTokens(finalContent, rawThinkingContent, toolUses)
+	outputTokens = estimateClaudeOutputTokens(finalContent, "", toolUses)
 
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
@@ -1814,7 +1814,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 	if !thinking {
 		reasoningOutput = ""
 	}
-	outputTokens = estimateApproxTokens(outputContent) + estimateApproxTokens(reasoningOutput)
+	outputTokens = estimateApproxTokens(outputContent)
 	for _, tc := range toolCalls {
 		outputTokens += estimateApproxTokens(tc.Function.Name)
 		outputTokens += estimateApproxTokens(tc.Function.Arguments)
@@ -1900,7 +1900,7 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 	} else if inputTokens <= 0 {
 		inputTokens = estimatedInputTokens
 	}
-	outputTokens = estimateOpenAIOutputTokens(finalContent, reasoningContent, toolUses)
+	outputTokens = estimateOpenAIOutputTokens(finalContent, "", toolUses)
 
 	h.recordSuccess(inputTokens, outputTokens, credits)
 	h.pool.RecordSuccess(account.ID)
